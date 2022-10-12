@@ -5,9 +5,9 @@ defaults:
 
 # Data
 category_name: "Clothing_Shoes_and_Jewelry" # Toys_and_Games/Clothing_Shoes_and_Jewelry/Home_and_Kitchen
-data_dir: ../data/final
+data_dir: /Users/kbibas/datasets/fbt_research/data/final
 
-method: "gan" # dcf/gan
+method: "pcomp" # dcf/gan/pcomp
 
 # Model
 img_encoder_output_dim: 16
@@ -28,6 +28,7 @@ is_autoecoder_detach: false
 # Triplet
 triplet_weight: 1.0
 triplet_loss_margin: 0.2
+hard_negative: true
 
 # Discriminator
 discriminator_weight: 0.3
@@ -36,6 +37,10 @@ clf_weight: 0.03
 # Cycle
 cycle_weight: 1.0
 cycle_weight_labeled_pairs: 0.5
+
+# P comp
+epsilon: 0.1
+lamb: 0.3
 
 # Evaluation
 check_val_every_n_epoch: 4
@@ -48,7 +53,7 @@ hydra:
   job:
     chdir: True
   run:
-    dir: ../outputs/train${note}_${method}_${category_name}_${now:%Y%m%d_%H%M%S}
+    dir: /Users/kbibas/code/fbt_research/outputs/train${note}_${method}_${category_name}_${now:%Y%m%d_%H%M%S}
   sweep:
-    dir: ../outputs/
+    dir: /Users/kbibas/code/fbt_research/outputs/
     subdir: train_${method}_${category_name}_${now:%Y%m%d_%H%M%S}_${hydra.job.num}

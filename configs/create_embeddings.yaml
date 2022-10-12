@@ -1,6 +1,6 @@
 category_name: "Clothing_Shoes_and_Jewelry" # Toys_and_Games/Clothing_Shoes_and_Jewelry
-data_processed_dir: ../data/processed
-data_final_dir: ../data/final
+data_processed_dir: /Users/kbibas/datasets/fbt_research/data/processed
+data_final_dir: /Users/kbibas/datasets/fbt_research/data/final
 
 num_workers: 2
 batch_size: 256

@@ -5,7 +5,7 @@ defaults:
 
 # Data
 category_name: "Clothing_Shoes_and_Jewelry" # Toys_and_Games/Clothing_Shoes_and_Jewelry
-data_dir: ../data/final
+data_dir: /Users/kbibas/datasets/fbt_research/data/final
 train_ratio: 0.8 # 80% samples for trainning
 
 # Optimization
