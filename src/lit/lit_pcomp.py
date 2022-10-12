@@ -9,65 +9,20 @@ import torch
 import wandb
 from sklearn.metrics import ndcg_score
 from torch import nn, optim
-
+from torch.nn.functional import mse_loss
 from .eval_utils import (
     calc_topk,
     generate_test_set_hot_labels,
     get_unique_asins,
     save_run_results,
 )
-from .lit_utils import LearnedEmbs
+
+from .lit_utils import LearnedEmbs, ImageEncoder
 
 logger = logging.getLogger(__name__)
 
 
-class ImageEncoder(nn.Module):
-    def __init__(
-        self,
-        input_emb_dim: int,
-        input_category_dim: int,
-        input_price_dim: int,
-        output_dim: int,
-        dropout_rate: float = 0.2,
-    ):
-        super().__init__()
-        self.input_emb_dim = input_emb_dim
-        self.input_category_dim = input_category_dim
-        self.input_price_dim = input_price_dim
-        self.input_dim = input_emb_dim + input_category_dim + input_price_dim
-        self.layers = nn.Sequential(
-            nn.Linear(in_features=self.input_dim, out_features=64),
-            nn.Dropout(p=dropout_rate),
-            nn.LeakyReLU(),
-            nn.Linear(in_features=64, out_features=output_dim),
-            nn.LeakyReLU(),
-        )
-
-    def forward(self, img_embs, category_embs, price_embs):
-        return self.layers(torch.hstack([img_embs, category_embs, price_embs]))
-
-
-class FusionModel(nn.Module):
-    def __init__(
-        self,
-        input_emb_dim: int,
-        dropout_rate: float = 0.2,
-    ):
-        super().__init__()
-        self.input_emb_dim = input_emb_dim
-        self.layers = nn.Sequential(
-            nn.Linear(in_features=self.input_emb_dim * 2, out_features=16),
-            nn.Dropout(p=dropout_rate),
-            nn.LeakyReLU(),
-            nn.Linear(16, out_features=1),
-        )
-
-    def forward(self, src_embs, candidate_embs):
-        embs = torch.hstack([src_embs, candidate_embs])
-        return self.layers(embs)
-
-
-class LitDCF(pl.LightningModule):
+class LitPcomp(pl.LightningModule):
     def __init__(
         self,
         input_emb_dim: int,
@@ -88,18 +43,28 @@ class LitDCF(pl.LightningModule):
         self.num_categories = num_categories
         self.category_embs = LearnedEmbs(num_categories, category_emb_size)
         self.price_embs = LearnedEmbs(num_price_bins, price_emb_size)
-        self.src_encoder = ImageEncoder(
-            input_emb_dim, category_emb_size, price_emb_size, emb_dim, 0.1
+        self.img_encoder = ImageEncoder(
+            input_emb_dim, category_emb_size, price_emb_size, emb_dim, cfg.dropout_rate
         )
-        self.candidate_encoder = ImageEncoder(
-            input_emb_dim, category_emb_size, price_emb_size, emb_dim, 0.1
-        )
-        self.fusion_model = FusionModel(emb_dim, 0.1)  # cfg.dropout_rate
-        self.criterion = nn.BCEWithLogitsLoss()
+        self.fbt_categories = LearnedEmbs(num_categories, emb_dim)
+        # nn.init.ones_(self.fbt_categories.embs.weight)
+
+        logger.info(self.category_embs)
+        logger.info(self.price_embs)
+        logger.info(self.img_encoder)
 
         # Performance
         self.ndcg_val_best = 0.0
         wandb.define_metric("retrieval_metrics/ndcg", summary="max")
+
+    def log(
+        self,
+        *args,
+        **kwargs,
+    ) -> None:
+        kwargs["on_epoch"] = True
+        kwargs["on_step"] = False
+        return super().log(*args, **kwargs)
 
     def _loss_helper(
         self, batch, phase="train", batch_idx: int = 0, optimizer_idx: int = 0
@@ -118,63 +83,51 @@ class LitDCF(pl.LightningModule):
             asin_pos,
             set_name,
         ) = batch
-
-        img_emb_neg_easy = torch.roll(img_emb_src, 1)
-        category_neg_easy = torch.roll(category_src, 1)
-        price_bin_neg_easy = torch.roll(price_bin_src, 1)
-
         category_src_emb = self.category_embs(category_src)
-        category_pos_emb = self.category_embs(category_pos)
-        category_neg_emb = self.category_embs(category_pos)
-        category_neg_emb_easy = self.category_embs(category_neg_easy)
+        category_dst_emb = self.category_embs(category_pos)
 
         price_src_emb = self.price_embs(price_bin_src)
         price_pos_emb = self.price_embs(price_bin_pos)
         price_neg_emb = self.price_embs(price_bin_neg)
-        price_neg_emb_easy = self.price_embs(price_bin_neg_easy)
 
-        src = self.src_encoder(img_emb_src, category_src_emb, price_src_emb)
-        pos = self.candidate_encoder(img_emb_pos, category_pos_emb, price_pos_emb)
-        neg = self.candidate_encoder(img_emb_neg, category_neg_emb, price_neg_emb)
-        neg_easy = self.candidate_encoder(
-            img_emb_neg_easy, category_neg_emb_easy, price_neg_emb_easy
-        )
+        src = self.img_encoder(img_emb_src, category_src_emb, price_src_emb)
+        pos = self.img_encoder(img_emb_pos, category_dst_emb, price_pos_emb)
+        neg = self.img_encoder(img_emb_neg, category_dst_emb, price_neg_emb)
 
-        pred_pos = self.fusion_model(src, pos)
-        pred_neg = self.fusion_model(src, neg)
-        pred_neg_easy = self.fusion_model(src, neg_easy)
+        src_fbt = (self.fbt_categories(category_pos) + 1) * src
 
-        target_pos = torch.ones_like(pred_pos)
-        loss_pos = self.criterion(pred_pos.squeeze(), target_pos.squeeze())
-        target_neg = torch.zeros_like(pred_neg)
-        loss_neg = self.criterion(pred_neg.squeeze(), target_neg.squeeze())
-        target_neg_easy = torch.zeros_like(pred_neg_easy)
-        loss_neg_easy = self.criterion(
-            pred_neg_easy.squeeze(), target_neg_easy.squeeze()
-        )
-        pred_pos = torch.sigmoid(pred_pos)
-        pred_neg = torch.sigmoid(pred_neg)
-
-        # Loss
-        if self.cfg.hard_negative:
-            loss = 0.5 * (loss_pos + loss_neg)
-        else:
-            loss = 0.5 * (loss_pos + loss_neg_easy)
+        # Triplet
+        zeros = torch.zeros_like(src_fbt)
+        loss_pos = torch.maximum(
+            zeros,
+            self.cfg.epsilon
+            - (self.cfg.lamb - mse_loss(src_fbt, pos, reduction="none")),
+        ).mean()
+        loss_neg = torch.maximum(
+            zeros,
+            self.cfg.epsilon
+            + (self.cfg.lamb - mse_loss(src_fbt, neg, reduction="none")),
+        ).mean()
+        loss = 0.5 * (loss_pos + loss_neg)
 
         # Logger
+        self.log(f"loss/{phase}/loss_pos", loss_pos)
+        self.log(f"loss/{phase}/loss_neg", loss_neg)
         self.log(f"loss/{phase}", loss)
-        self.log(f"clf/{phase}/acc/pred_pos", pred_pos.mean())
-        self.log(f"clf/{phase}/acc/pred_neg", pred_neg.mean())
-        self.log(f"clf/{phase}/loss/loss_pos", loss_pos)
-        self.log(f"clf/{phase}/loss/loss_neg", loss_neg)
 
         # Logger
+        src_fbt_std_mean = src_fbt.mean(axis=-1).mean()
+        src_fbt_std = src_fbt.std(axis=-1).mean()
+        src_fbt_avg_norm = torch.norm(src_fbt, dim=-1).mean()
         category_emb_mean = category_src_emb.mean(axis=-1).mean()
         category_emb_avg_norm = torch.norm(category_src_emb, dim=-1).mean()
         category_emb_max_val = torch.max(category_src_emb)
 
         epoch = float(self.trainer.current_epoch)
         self.log(f"epoch/{phase}", epoch)
+        self.log(f"src_fbt/avg", src_fbt_std_mean)
+        self.log(f"src_fbt/std", src_fbt_std)
+        self.log(f"src_fbt/avg_norm", src_fbt_avg_norm)
         self.log(f"category_emb/avg", category_emb_mean)
         self.log(f"category_emb/avg_norm", category_emb_avg_norm)
         self.log(f"category_emb/max_val", category_emb_max_val)
@@ -183,10 +136,10 @@ class LitDCF(pl.LightningModule):
             "asin_src": asin_src,
             "asin_pos": asin_pos,
             "src": src.detach().cpu(),
+            "src_fbt": src_fbt.detach().cpu(),
             "pos": pos.detach().cpu(),
             "category_src": category_src.detach().cpu(),
             "category_pos": category_pos.detach().cpu(),
-            "category_neg": category_pos.detach().cpu(),
             "set_name": set_name,
         }
 
@@ -220,6 +173,7 @@ class LitDCF(pl.LightningModule):
         # Get values from step
         epoch = int(self.trainer.current_epoch)
         src = torch.vstack([out["src"] for out in outputs])
+        src_fbt = torch.vstack([out["src_fbt"] for out in outputs])
         pos = torch.vstack([out["pos"] for out in outputs])
         asin_src = np.hstack([out["asin_src"] for out in outputs])
         asin_pos = np.hstack([out["asin_pos"] for out in outputs])
@@ -228,23 +182,23 @@ class LitDCF(pl.LightningModule):
         set_name = np.hstack([out["set_name"] for out in outputs])
 
         # Test sources: have a unique pair of (source,target-category)
-        src_test = src[set_name == "test"]
+        src_fbt_test = src_fbt[set_name == "test"]
         asin_src_test = asin_src[set_name == "test"]
         category_pos_test = category_pos[set_name == "test"]
 
         locs = list(zip(asin_src_test, category_pos_test))
         _, unique_idxs = np.unique(np.array(locs), axis=0, return_index=True)
-        src_test, asin_src_test, category_pos_test = (
-            src_test[unique_idxs],
+        src_fbt_test, asin_src_test, category_pos_test = (
+            src_fbt_test[unique_idxs],
             asin_src_test[unique_idxs],
             category_pos_test[unique_idxs],
         )
 
         # Candidate to compare with
-        asins = asin_pos
-        candidates = pos
-        categories = category_pos
-        asins, candidates, categories = get_unique_asins(asins, candidates, categories)
+        asins = np.hstack([asin_src, asin_pos])
+        embs = torch.vstack([src, pos])
+        categories = np.hstack([category_src, category_pos])
+        asins, embs, categories = get_unique_asins(asins, embs, categories)
 
         # Build hot label
         t1 = time()
@@ -259,23 +213,14 @@ class LitDCF(pl.LightningModule):
         )
         logger.info(f"hot_labels in {time()-t1:.1f} s. {hot_labels.shape=}")
 
-        # Find distance of the candidates: infernece of the source with each candidate. This is the row of dists
+        # Find distance of the candidates
         t2 = time()
-        probs = torch.vstack(
-            [
-                torch.sigmoid(
-                    self.fusion_model(
-                        (src_i.repeat(len(candidates), 1)), candidates
-                    ).squeeze()
-                )
-                for src_i in src_test
-            ]
-        )
+        dists = torch.cdist(src_fbt_test, embs, p=2)
+        probs = torch.softmax(-dists, axis=-1)
 
         # Constrain to target cateogry
         for n, cat in enumerate(category_pos_test):
             probs[n, categories != cat] = 0
-        probs = probs / probs.sum(axis=1, keepdim=True)
 
         # Calculate retrival metrics
         ndcg_val = ndcg_score(hot_labels, probs)
@@ -294,6 +239,7 @@ class LitDCF(pl.LightningModule):
             save_run_results(
                 {
                     "src": src,
+                    "src_fbt": src_fbt,
                     "pos": pos,
                     "asin_src": asin_src,
                     "asin_pos": asin_pos,

@@ -30,6 +30,8 @@ def generate_test_set_hot_labels(
 
 def vectorize_sort(x, permutation):
     # Order tensor by indecis
+    if isinstance(x, np.ndarray):
+        x = torch.from_numpy(x)
     d1, d2 = x.size()
     ret = x[
         torch.arange(d1).unsqueeze(1).repeat((1, d2)).flatten(),
