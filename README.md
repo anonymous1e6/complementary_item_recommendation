@@ -31,6 +31,8 @@ python main_execute_train.py category_name=Clothing_Shoes_and_Jewelry note="_tri
 python main_execute_train.py category_name=Clothing_Shoes_and_Jewelry note="_clf_and_cycle_" triplet_weight=0.0 discriminator_weight=0.0
 python main_execute_train.py category_name=Clothing_Shoes_and_Jewelry
 python main_execute_train.py category_name=Clothing_Shoes_and_Jewelry method="dcf"
+python main_execute_train.py category_name=Clothing_Shoes_and_Jewelry method="dcf" hard_negative=false
+
 ```
 
 ```
@@ -44,6 +46,7 @@ python main_execute_train.py category_name=Toys_and_Games note="_triplet_and_cyc
 python main_execute_train.py category_name=Toys_and_Games note="_clf_and_cycle_" triplet_weight=0.0 discriminator_weight=0.0
 python main_execute_train.py category_name=Toys_and_Games
 python main_execute_train.py category_name=Toys_and_Games method="dcf"
+python main_execute_train.py category_name=Toys_and_Games method="dcf" hard_negative=false
 ```
 
 ```
@@ -56,4 +59,10 @@ python main_execute_train.py category_name=Home_and_Kitchen note="_triplet_and_c
 python main_execute_train.py category_name=Home_and_Kitchen note="_clf_and_cycle_" triplet_weight=0.0 discriminator_weight=0.0
 python main_execute_train.py category_name=Home_and_Kitchen
 python main_execute_train.py category_name=Home_and_Kitchen method="dcf"
+python main_execute_train.py category_name=Home_and_Kitchen method="dcf" hard_negative=false
+python main_execute_train.py category_name=Home_and_Kitchen method="pcomp" 
 ```
+
+python main_execute_train.py category_name=Clothing_Shoes_and_Jewelry method="pcomp" note="_addone" \;
+python main_execute_train.py category_name=Toys_and_Games method="pcomp" note="_addone" \;
+python main_execute_train.py category_name=Home_and_Kitchen method="pcomp" note="_addone"
