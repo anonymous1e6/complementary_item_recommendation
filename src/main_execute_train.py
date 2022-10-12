@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from dataset_utils import FbtDataset, load_dfs
 from lit.lit_utils import LitFbt
 from lit.lit_dcf import LitDCF
+from lit.lit_pcomp import LitPcomp
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,17 @@ def execute_train(cfg: DictConfig):
         )
     elif cfg.method == "dcf":
         lit_model = LitDCF(
+            img_emb_dim,
+            cfg.img_encoder_output_dim,
+            num_categories,
+            cfg.category_emb_size,
+            num_price_bins,
+            cfg.price_emb_size,
+            cfg,
+            out_dir,
+        )
+    elif cfg.method == "pcomp":
+        lit_model = LitPcomp(
             img_emb_dim,
             cfg.img_encoder_output_dim,
             num_categories,
