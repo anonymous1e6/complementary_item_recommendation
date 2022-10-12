@@ -15,7 +15,8 @@ from tqdm import tqdm
 
 from inferece_utils import calc_ndcg_per_category, calc_performance, get_dataloaders
 from lit.eval_utils import generate_test_set_hot_labels, get_unique_asins
-from lit.lit_utils import LitFbt
+from lit.lit_pcomp import LitPcomp
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,10 @@ def model_inference(model, category, price_bin, img_emb):
     return emb
 
 
-def evalaute_gan(candidate_loader, inference_loader, cfg):
+def evalaute_pcomp(candidate_loader, inference_loader, cfg):
     # Load weights
     checkpoint = osj(cfg.model_weight_dir, "checkpoint.ckpt")
-    lit_model = LitFbt.load_from_checkpoint(checkpoint)
+    lit_model = LitPcomp.load_from_checkpoint(checkpoint)
     lit_model.eval()
 
     # Iterate on candidates
@@ -76,8 +77,7 @@ def evalaute_gan(candidate_loader, inference_loader, cfg):
             valid_categories_hstack = torch.hstack(valid_categories)
             src_repeat = src.repeat(len(valid_categories), 1)
 
-            category_dst_emb = lit_model.category_embs(valid_categories_hstack)
-            src_fbt = lit_model.fbt_ae(src_repeat, category_dst_emb)
+            src_fbt = lit_model.fbt_categories(valid_categories_hstack) * src_repeat
             dists_i = torch.cdist(src_fbt, candidates, p=2)
             dists_i = dists_i.min(axis=0).values
 
@@ -102,7 +102,7 @@ def evalaute_gan(candidate_loader, inference_loader, cfg):
     calc_performance(hot_labels, probs, cfg)
 
 
-def evaluate_category_aware(dataset, cfg, out_dir):
+def evaluate_pcomp_category_aware(dataset, cfg, out_dir):
     path = cfg.model_weight_dir
     model_base_dir = osp.basename(path)
     asin_src = torch.load(osj(path, "asin_src.pth"))
@@ -157,7 +157,7 @@ def evaluate_category_aware(dataset, cfg, out_dir):
 
 
 @hydra.main(version_base="1.2", config_path="../configs/", config_name="inference")
-def execute_gan_inference(cfg: DictConfig):
+def execute_pcomp_inference(cfg: DictConfig):
     t0 = time()
     out_dir = os.getcwd()
     os.chdir(hydra.utils.get_original_cwd())
@@ -175,20 +175,20 @@ def execute_gan_inference(cfg: DictConfig):
     logger.info(f"out_dir={out_dir}")
     logger.info(cfg)
     logger.info(f"{torch.backends.mps.is_available()=}")
-    for category_name, model_gan_weight_dir in zip(
-        cfg.category_names, cfg.model_gan_weight_dirs
+    for category_name, model_pcomp_weight_dir in zip(
+        cfg.pcomp_category_names, cfg.model_pcomp_weight_dirs
     ):
 
         t1 = time()
         cfg.category_name = category_name
-        cfg.model_weight_dir = model_gan_weight_dir
+        cfg.model_weight_dir = model_pcomp_weight_dir
         candidate_loader, inference_loader, dataset = get_dataloaders(cfg)
 
-        evalaute_gan(candidate_loader, inference_loader, cfg)
-        evaluate_category_aware(dataset, cfg, out_dir)
+        evalaute_pcomp(candidate_loader, inference_loader, cfg)
+        evaluate_pcomp_category_aware(dataset, cfg, out_dir)
         logger.info(f"Finish {category_name} in {time() - t1:.1f} s")
-    logger.info(f"Finish execute_gan_inference in {time() - t0:.1f} s")
+    logger.info(f"Finish execute_pcomp_inference in {time() - t0:.1f} s")
 
 
 if __name__ == "__main__":
-    execute_gan_inference()
+    execute_pcomp_inference()
